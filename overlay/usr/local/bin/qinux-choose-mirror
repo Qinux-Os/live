@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# Choose a mirror from the kernel command line.
+#
+# An ISO built for one network is useless on another. Rather than shipping a
+# fixed mirror list that is slow for most of the world, the list is chosen at
+# first boot from the `mirror=` kernel parameter, falling back to the list the
+# distribution ships.
+#
+#   mirror=https://mirror.qinux-os.org      use one mirror
+#   mirror=auto                             pick from archiso_http_srv
+#   mirror=                                 leave the shipped list alone
+#
+# Carried over from Nexus Linux, rewritten for Qinux's repository layout.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+readonly MIRRORLIST=/etc/pacman.d/mirrorlist.qinux.conf
+
+# get_cmdline PARAM   Print the value of a kernel command line parameter.
+get_cmdline() {
+    local param
+    for param in $(</proc/cmdline); do
+        case "${param}" in
+            "${1}="*)
+                printf '%s\n' "${param##*=}"
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+main() {
+    [[ -w "$MIRRORLIST" ]] || return 0
+
+    local mirror
+    mirror=$(get_cmdline mirror || true)
+
+    # `auto` means the ISO was served over HTTP and already knows the server it
+    # came from; using it saves the user a round trip.
+    if [[ "$mirror" == auto ]]; then
+        mirror=$(get_cmdline archiso_http_srv || true)
+    fi
+
+    [[ -n "$mirror" ]] || return 0
+
+    # Keep the original so `qinux-cli mirror reset` can restore it.
+    [[ -f "$MIRRORLIST.orig" ]] || cp "$MIRRORLIST" "$MIRRORLIST.orig"
+
+    # %% strips the trailing slash from a user who wrote one, so the path is
+    # not doubled. \$repo and \$arch are literal: pacman expands them, not
+    # this script, so they must survive the heredoc unexpanded.
+    cat >"$MIRRORLIST" <<EOF
+# Qinux mirrorlist, generated at first boot from the kernel command line.
+# The shipped list is in ${MIRRORLIST}.orig
+
+Server = ${mirror%%/}/\$repo/os/\$arch
+EOF
+
+    printf 'qinux-live: using mirror %s\n' "$mirror" >&2
+}
+
+main "$@"

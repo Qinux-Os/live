@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+#
+# Run a command as root with the session's display environment intact.
+#
+# pkexec sanitises the environment before running a command as root, which
+# removes DISPLAY and WAYLAND_DISPLAY. A graphical application launched through
+# it therefore has no display to connect to and fails with an error that says
+# nothing about the cause.
+#
+# This passes the session variables through explicitly. That is safe because
+# they are display connection hints, not authorisation: a caller who can run
+# pkexec is already root, so what they can learn from these is nothing they
+# could not get by running the command directly.
+#
+# Rewritten for Qinux from a Nexus script that listed XDG_RUNTIME_DIR in a
+# trailing comment, which is the one variable that actually matters under
+# Wayland and was therefore the one that was missing.
+
+exec pkexec env \
+    DISPLAY="$DISPLAY" \
+    WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+    XAUTHORITY="$XAUTHORITY" \
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+    XDG_CURRENT_DESKTOP="$XDG_CURRENT_DESKTOP" \
+    XDG_SESSION_TYPE="$XDG_SESSION_TYPE" \
+    KDE_SESSION_VERSION="$KDE_SESSION_VERSION" \
+    dbus-launch --exit-with-session "$@"

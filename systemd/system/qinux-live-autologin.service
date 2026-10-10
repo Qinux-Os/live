@@ -1,0 +1,23 @@
+[Unit]
+Description=Qinux live autologin
+Documentation=https://github.com/Qinux-Os/live
+# After, not Requires: the display manager is what fails when there is no seat,
+# and a service that Requires it would then never run.
+After=systemd-user-sessions.service getty@tty2.service
+After=display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# systemd-run --machine, so this works for every seat rather than only seat0.
+ExecStart=/usr/bin/systemd-run --machine=qinux --unit=qinux-live-session \
+    --setenv=USER=qinux --setenv=GROUP=users \
+    /usr/bin/qinux-session start
+# The session is torn down when the installer writes the disk. Without this the
+# live user's session survives into the installed system, which is both wrong
+# and, after a reboot into the installed system, a security problem.
+ExecStop=/usr/bin/systemd-run --machine=qinux --unit=qinux-live-session \
+    /usr/bin/qinux-session stop
+
+[Install]
+WantedBy=multi-user.target

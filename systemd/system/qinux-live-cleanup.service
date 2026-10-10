@@ -1,0 +1,15 @@
+[Unit]
+Description=Qinux live cleanup
+Documentation=https://github.com/Qinux-Os/live
+# After the installer only. Running this during a live session the user is
+# still using would delete the tools they are about to need.
+After=calamares-finished.target
+ConditionPathExists=/run/qinux-live-installed
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/qinux-remove-installer
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# Prepare the live user's desktop before the session starts.
+#
+# Two things need doing that cannot be done from the desktop's own autostart:
+#
+#   1. A Trash directory on the read-only lower layer. Without it, every delete
+#      is permanent with no warning, which is the fastest way to lose a file a
+#      user only meant to move.
+#   2. The desktop entries marked trusted, so nothing prompts on first click.
+#
+# Rewritten for Qinux from a script that used `ls $xdg/*desktop` in a for loop,
+# which breaks on a filename containing a space and on an empty directory.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+log() { printf 'qinux-live: %s\n' "$*" >&2; }
+
+main() {
+    local user=${USER:-}
+    [[ -n "$user" ]] || { log 'USER is not set, skipping'; return 0; }
+
+    # --- Trash ---------------------------------------------------------
+    #
+    # Per-user, not shared: a shared Trash on a multi-user live session lets one
+    # user read what another deleted.
+    local trash="/.Trash-$(id -u "$user")"
+    if [[ ! -d "$trash" ]]; then
+        mkdir -p "$trash"/{expunged,files,info} || {
+            log "could not create $trash"
+            return 1
+        }
+        chown -R "$user" "$trash" || log "could not chown $trash"
+        chmod 700 "$trash"
+        log "created $trash"
+    fi
+
+    # --- Trusted launchers ---------------------------------------------
+    #
+    # Null-separated throughout. A desktop file with a space in its name is
+    # unusual but not impossible, and a word-split loop silently skips it.
+    local desktop
+    desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
+    [[ -d "$desktop" ]] || return 0
+
+    local -a entries=()
+    mapfile -d '' -t entries < <(find "$desktop" -maxdepth 1 -name '*.desktop' -print0)
+
+    local f checksum
+    for f in "${entries[@]}"; do
+        [[ -f "$f" ]] || continue
+
+        # gio is the only tool that can set the metadata; a direct write to
+        # the file would invalidate any extended attribute already set.
+        command -v gio >/dev/null 2>&1 || continue
+
+        checksum=$(sha256sum "$f" | cut -d' ' -f1)
+        if ! gio set -t string "$f" metadata::trusted "$checksum" 2>/dev/null; then
+            log "could not mark $(basename "$f") as trusted"
+        fi
+    done
+
+    (( ${#entries[@]} > 0 )) && log "prepared ${#entries[@]} desktop entries"
+    return 0
+}
+
+main "$@"

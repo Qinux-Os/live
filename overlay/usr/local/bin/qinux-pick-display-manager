@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# Pick a display manager for the live session.
+#
+# A live image can carry more than one greeter, and they disagree about who owns
+# /usr/lib/systemd/system/display-manager.service. Without this, the image
+# boots to whichever one was enabled when it was built, which is not
+# necessarily the one the user wants.
+#
+# Only the display manager that is actually installed gets enabled, and the
+# previous choice is remembered so `qinux-dm-switch` can go back.
+#
+# Rewritten for Qinux from a script that handled each greeter in a separate
+# copy-pasted block.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+readonly WANTED_LINK=/etc/systemd/system/display-manager.service
+readonly STATE_DIR=/var/lib/qinux-live
+
+# Candidate display managers, in preference order. The unit name is the
+# authoritative part; the package is only used to decide whether it is there.
+readonly CANDIDATES=(
+    'sddm:sddm.service'
+    'lightdm:lightdm.service'
+    'gdm:gdm.service'
+)
+
+main() {
+    mkdir -p "$STATE_DIR"
+
+    local package unit chosen=''
+
+    for entry in "${CANDIDATES[@]}"; do
+        package=${entry%%:*}
+        unit=${entry##*:}
+
+        if ! pacman -Qq "$package" >/dev/null 2>&1; then
+            continue
+        fi
+
+        # A package can ship the unit without enabling it, so check the unit
+        # exists rather than trusting the symlink.
+        if [[ ! -e "/usr/lib/systemd/system/$unit" ]]; then
+            printf 'qinux-live: %s is installed but has no %s, skipping\n' \
+                "$package" "$unit" >&2
+            continue
+        fi
+
+        chosen=$unit
+        break
+    done
+
+    if [[ -z "$chosen" ]]; then
+        printf 'qinux-live: no supported display manager is installed\n' >&2
+        return 1
+    fi
+
+    # Remember what was there, so the change can be undone. A symlink is
+    # recorded by its target: the link itself is about to be replaced.
+    if [[ -L "$WANTED_LINK" ]]; then
+        readlink "$WANTED_LINK" >"$STATE_DIR/previous-display-manager"
+    elif [[ -e "$WANTED_LINK" ]]; then
+        # A real file, not a symlink. Whatever wrote it owns it; leave a note.
+        : >"$STATE_DIR/previous-display-manager-was-a-file"
+    fi
+
+    ln -sfn "/usr/lib/systemd/system/$chosen" "$WANTED_LINK"
+    printf 'qinux-live: display manager set to %s\n' "$chosen" >&2
+}
+
+main "$@"

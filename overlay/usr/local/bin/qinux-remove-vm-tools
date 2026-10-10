@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# Remove the virtual machine guest helpers from a live image.
+#
+# A live image that is running inside a VM carries guest agents for every
+# hypervisor it might be started under. They are all the same size in the ISO,
+# and at boot exactly one of them is the right one.
+#
+# Removing them on a physical machine matters less, but a live image is 3 GB and
+# every megabyte is one a user does not download.
+#
+# Rewritten for Qinux from a Nexus script whose virtual-machine detection was
+# inverted: `systemd-detect-virt | grep -q none` succeeds when NOT in a VM, so
+# the original ran the cleanup on every real machine and skipped it in every
+# VM, which is backwards.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# package|unit|extra-file
+readonly VM_PACKAGES=(
+    'virtualbox-guest-utils:vboxservice.service:'
+    'virtualbox-guest-utils-nox:vboxservice.service:'
+    'open-vm-tools:vmtoolsd.service:/etc/xdg/autostart/vmware-user.desktop'
+    'qemu-guest-agent:qemu-guest-agent.service:'
+    'spice-vdagentd:spice-vdagentd.service:'
+)
+
+main() {
+    local virt
+    virt=$(systemd-detect-virt 2>/dev/null || echo none)
+
+    if [[ "$virt" == none ]]; then
+        # A physical machine. Skip: removing packages the user might want on
+        # the live session is a change they did not ask for.
+        return 0
+    fi
+
+    printf 'qinux-live: running under %s, removing unused guest agents\n' "$virt" >&2
+
+    local entry pkg unit file
+    for entry in "${VM_PACKAGES[@]}"; do
+        pkg=${entry%%:*}
+        unit=${entry#*:}
+        unit=${unit%%:*}
+        file=${entry##*:}
+
+        if ! pacman -Qq "$pkg" >/dev/null 2>&1; then
+            continue
+        fi
+
+        # Stopping a unit that is not enabled or not running returns non-zero,
+        # which under `set -e` would abort. It is a best effort.
+        systemctl disable --now "$unit" >/dev/null 2>&1 || true
+
+        pacman -Rdd --noconfirm "$pkg" >/dev/null 2>&1 \
+            || printf 'qinux-live: warning: could not remove %s\n' "$pkg" >&2
+
+        # Autostart entries are not owned by the package in every case, so they
+        # are removed separately.
+        if [[ -n "$file" && -e "$file" ]]; then
+            rm -f "$file"
+        fi
+    done
+
+    return 0
+}
+
+main "$@"

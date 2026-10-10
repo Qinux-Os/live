@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#
+# Remove the installer and everything only it needs, from a running live image.
+#
+# The live ISO carries Calamares so the user can install from it. Once they
+# have installed, none of that is wanted on the running system: it is several
+# hundred megabytes of installer and build tooling that will never run again.
+#
+# Run by the desktop's first-boot hook, after the user has installed. It is
+# safe to run more than once: every step checks before it acts.
+#
+# Rewritten for Qinux from a script that removed packages belonging to two
+# other distributions alongside Qinux's own.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# Packages to remove. Anything listed here must be optional: removing a
+# package the running system needs breaks the live session it is running in.
+readonly INSTALLER_PACKAGES=(
+    # The installer itself
+    calamares
+    qinux-installer
+    qinux-installer-modules
+    qinux-calamares-config
+
+    # Install-time tooling with no use afterwards
+    gparted
+    grsync
+    clonezilla
+    memtest86+
+    edk2-shell
+
+    # Build and packaging tools, only present so a package could be built
+    # from the live image
+    expect
+    doxygen
+    cmake
+    extra-cmake-modules
+    boost-libs
+    yaml-cpp
+    elinks
+    tcpdump
+    gpart
+    squashfs-tools
+    syslinux
+    arch-install-scripts
+    mkinitcpio-archiso
+)
+
+# Files to remove, if present. Live-session helpers that have already done
+# their job.
+readonly INSTALLER_FILES=(
+    /usr/local/bin/qinux-choose-mirror
+    /usr/local/bin/qinux-prepare-live-desktop
+    /usr/local/bin/qinux-remove-installer
+    /usr/local/share/livecd-sound
+)
+
+main() {
+    local removed=0
+
+    # Only remove packages that are actually installed. Passing an unknown
+    # package name to pacman is an error, and on a partial list that would
+    # abort the whole transaction and remove nothing.
+    local -a present=()
+    local pkg
+    for pkg in "${INSTALLER_PACKAGES[@]}"; do
+        if pacman -Qq "$pkg" >/dev/null 2>&1; then
+            present+=("$pkg")
+        fi
+    done
+
+    if (( ${#present[@]} > 0 )); then
+        printf 'qinux-live: removing %d installer package(s)\n' "${#present[@]}" >&2
+        pacman -Rdd --noconfirm --nosave "${present[@]}" \
+            || printf 'qinux-live: warning: pacman reported an error\n' >&2
+        removed=$(( removed + ${#present[@]} ))
+    fi
+
+    local f
+    for f in "${INSTALLER_FILES[@]}"; do
+        [[ -e "$f" ]] || continue
+        rm -rf "$f"
+        removed=$(( removed + 1 ))
+    done
+
+    # pacman hooks and the package database can be large after a removal.
+    if command -v paccache >/dev/null 2>&1; then
+        paccache -rk2 >/dev/null 2>&1 || true
+    fi
+
+    printf 'qinux-live: removed %d item(s)\n' "$removed" >&2
+    return 0
+}
+
+main "$@"

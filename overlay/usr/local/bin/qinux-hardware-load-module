@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#
+# Load the right NVIDIA driver generation for the hardware present.
+#
+# Referenced from /etc/modprobe.d/qinux-nvidia.conf, which redirects every
+# NVIDIA module load here. Loading `nvidia` directly is the usual cause of
+# "NVIDIA kernel module is not built for the running kernel" after an update:
+# the module name alone does not say which driver generation the card needs, so
+# the wrong one loads and the failure looks like a kernel problem.
+#
+# Rewritten for Qinux from a Nexus script whose hardware detection called
+# `chwd`, a tool that is not installed on a Qinux image and has no
+# documentation in the repo, so the branch it selected never ran.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# One of the two module families is loaded, never both: nouveau and the
+# proprietary driver both want the kernel mode setting interface, and loading
+# both leaves a machine with no usable display.
+readonly NOUVEAU=/sys/module/nouveau
+readonly NVIDIA=/sys/module/nvidia
+
+# PCI vendor:device prefix for each proprietary generation. Nouveau covers
+# everything the proprietary driver does not, which is why it is the fallback
+# rather than an error.
+readonly DKMS_470='nvidia-dkms-470xx'
+readonly DKMS_580='nvidia-dkms-580xx'
+readonly OPEN_DKMS='nvidia-open-dkms'
+
+log() { printf 'qinux-hardware: %s\n' "$*" >&2; }
+
+main() {
+    # Already loaded: nothing to do. Whichever module got there first won, and
+    # unloading it to try the other one is how a live session ends up with a
+    # black screen.
+    if [[ -d "$NOUVEAU" || -d "$NVIDIA" ]]; then
+        return 0
+    fi
+
+    # Which DKMS module is built for the running kernel. An out-of-tree module
+    # built against a different kernel cannot load, so this has to be checked
+    # rather than assumed.
+    local family=''
+    if dkms status 2>/dev/null | grep -q "$DKMS_470"; then
+        family=$DKMS_470
+    elif dkms status 2>/dev/null | grep -q "$DKMS_580"; then
+        family=$DKMS_580
+    elif dkms status 2>/dev/null | grep -q "$OPEN_DKMS"; then
+        family=$OPEN_DKMS
+    fi
+
+    if [[ -z "$family" ]]; then
+        log 'no NVIDIA DKMS module is built for this kernel, using nouveau'
+        modprobe nouveau || return 1
+        return 0
+    fi
+
+    log "loading $family"
+
+    # --ignore-install, because modprobe.d redirects these module names back
+    # to this script. Without it the load re-enters here and recurses.
+    modprobe --ignore-install -a video drm_ttm_helper drm_kms_helper
+
+    case $family in
+        "$OPEN_DKMS")
+            modprobe --ignore-install -a nvidia nvidia-modeset nvidia-drm nvidia-uvm
+            ;;
+        *)
+            modprobe --ignore-install -a nvidia nvidia_modeset nvidia_uvm
+            ;;
+    esac
+}
+
+main "$@"
